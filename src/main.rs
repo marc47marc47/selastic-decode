@@ -115,45 +115,51 @@ fn main() {
 
                     // 假設 Elasticsearch 使用 9200 埠
                     if tcp_packet.get_destination() == 9200 || tcp_packet.get_source() == 9200 {
-                        println!("-----Elasticsearch Packet-----");
+                        //println!("-----Elasticsearch Packet-----");
                         let payload = tcp_packet.payload();
                         if let Ok(payload_str) = str::from_utf8(payload) {
-                            // 嘗試解析 JSON 數據
-                            if let Ok(json_data) = serde_json::from_str::<Value>(payload_str) {
-                                // 提取 SQL 日誌所需的欄位
-                                let sql_stmt = payload_str.to_string();
-                                println!("payload str: {:?}", sql_stmt);
-                                let sql_type = determine_sql_type(&sql_stmt);
-                                let exe_status = if tcp_packet.get_flags() & 0x10 != 0 {
-                                    "SUCCESS".to_string()
+                            // Split the payload string into headers and body
+                            let parts: Vec<&str> = payload_str.splitn(2, "\r\n\r\n").collect();
+                            // println!("--Payload ------------\n {:?}", parts);
+                            if parts.len() >= 2 {
+                                let json_body = parts[1];
+                                //println!("--JSON Body ------------------\n {:?}", json_body);
+                                // Try to parse the JSON data
+                                if let Ok(json_data) = serde_json::from_str::<Value>(json_body) {
+                                    println!("-- JSON Data ---------\n {:#?}", json_data);
+                                    // Extract fields needed for SQL log
+                                    let sql_stmt = json_body.to_string();
+                                    println!("payload str: {:?}", sql_stmt);
+                                    let sql_type = determine_sql_type(&sql_stmt);
+                                    let exe_status = if tcp_packet.get_flags() & 0x10 != 0 {
+                                        "SUCCESS".to_string()
+                                    } else {
+                                        "FAILURE".to_string()
+                                    };
+                                    let conn_hash = calculate_hash(&sql_stmt).to_string();
+                                    let exec_time = SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap()
+                                        .as_millis();
+
+                                    // Create SqlLog object
+                                    let sql_log = SqlLog {
+                                        conn_hash,
+                                        stmt_id,
+                                        exec_id,
+                                        exec_time,
+                                        sql_type,
+                                        exe_status,
+                                        db_ip: IpAddr::V4(ip_packet.get_destination()),
+                                        client_ip: IpAddr::V4(ip_packet.get_source()),
+                                        sql_stmt,
+                                        stmt_bind_vars: Some(json_data),
+                                    };
                                 } else {
-                                    "FAILURE".to_string()
-                                };
-                                let conn_hash = calculate_hash(&sql_stmt).to_string();
-                                let exec_time = SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_millis();
-
-                                // 建立 SqlLog 物件
-                                let sql_log = SqlLog {
-                                    conn_hash,
-                                    stmt_id,
-                                    exec_id,
-                                    exec_time,
-                                    sql_type,
-                                    exe_status,
-                                    db_ip: IpAddr::V4(ip_packet.get_destination()),
-                                    client_ip: IpAddr::V4(ip_packet.get_source()),
-                                    sql_stmt,
-                                    stmt_bind_vars: Some(json_data),
-                                };
-
-                                // 列印日誌
-                                println!("{:?}", sql_log);
-
-                                // 更新 ID
-                                exec_id += 1;
+                                    println!("Failed to parse JSON data");
+                                }
+                            //} else {
+                            //    println!("Invalid payload format");
                             }
                         }
                     }
